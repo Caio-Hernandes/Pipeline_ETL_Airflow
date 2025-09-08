@@ -57,6 +57,9 @@ Acesse http://localhost:8080 e configure:
 - Password: `v3rysecur&pas5w0rd`
 - Port: `55432`
 
+<img width="1920" height="1080" alt="airflow1" src="https://github.com/user-attachments/assets/37a27ff8-f35f-4d1a-b78d-60369c1a1ead" />
+<img width="1920" height="1080" alt="airflow2" src="https://github.com/user-attachments/assets/9bebec81-037a-4550-846a-c8e295187fad" />
+
 ## Execução
 
 ### 1. Execução Automática
