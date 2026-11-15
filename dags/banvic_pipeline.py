@@ -112,6 +112,58 @@ with DAG(
         cur.close()
         conn.close()
 
+
+    def transform_mart():
+        hook = PostgresHook(postgres_conn_id="dw_postgres")
+
+        sql = """
+        CREATE TABLE IF NOT EXISTS mart.resumo_agencias (
+            cod_agencia INTEGER PRIMARY KEY,
+            agencia TEXT NOT NULL,
+            uf CHAR(2),
+            total_contas INTEGER NOT NULL,
+            total_clientes INTEGER NOT NULL,
+            saldo_total NUMERIC(18, 2) NOT NULL,
+            saldo_medio NUMERIC(18, 2)
+        );
+
+        TRUNCATE TABLE mart.resumo_agencias;
+
+        INSERT INTO mart.resumo_agencias (
+            cod_agencia,
+            agencia,
+            uf,
+            total_contas,
+            total_clientes,
+            saldo_total,
+            saldo_medio
+        )
+        SELECT
+            a.cod_agencia::INTEGER,
+            a.nome,
+            a.uf,
+            COUNT(DISTINCT c.num_conta)::INTEGER,
+            COUNT(DISTINCT c.cod_cliente)::INTEGER,
+            COALESCE(
+                SUM(NULLIF(TRIM(c.saldo_total), '')::NUMERIC),
+                0
+            ),
+            ROUND(
+                AVG(NULLIF(TRIM(c.saldo_total), '')::NUMERIC),
+                2
+            )
+        FROM staging.sql_agencias a
+        LEFT JOIN staging.sql_contas c
+            ON a.cod_agencia = c.cod_agencia
+        GROUP BY
+            a.cod_agencia,
+            a.nome,
+            a.uf;
+        """
+
+        hook.run(sql)
+        print("Mart de agências atualizada com sucesso.")
+
     t1 = PythonOperator(
         task_id='extract_sql',
         python_callable=extract_sql,
@@ -129,5 +181,9 @@ with DAG(
         python_callable=load_dw,
         op_kwargs={'ds': '{{ ds }}'}
     )
+    t4 = PythonOperator(
+            task_id="transform_mart",
+            python_callable=transform_mart
+    )
 
-    [t1, t2] >> t3 # faz o 1, o 2, se der green, faz o 3.
+    [t1, t2] >> t3 >> t4 # faz o 1, o 2, se der green, faz o 3, se der green faz o 4.
