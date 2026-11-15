@@ -1,112 +1,91 @@
 # Pipeline de Dados BanVic
 
-## Visão Geral
-Pipeline de dados desenvolvida para o Banco Vitória (BanVic) utilizando Apache Airflow para extrair dados de fontes SQL e CSV, processá-los e carregá-los em um Data Warehouse PostgreSQL para análises de crédito.
+Pipeline ELT do Banco Vitória (BanVic), orquestrada pelo Apache Airflow. A DAG extrai tabelas PostgreSQL e um arquivo CSV, salva os dados extraídos por data e carrega as tabelas no Data Warehouse.
 
 ## Arquitetura
-- **Orquestração**: Apache Airflow 2.8.1
-- **Data Warehouse**: PostgreSQL 16
-- **Fontes de Dados**: PostgreSQL (dados transacionais) + CSV (transações)
-- **Processamento**: Pipeline ELT com camadas staging e mart
+
+- **Orquestração:** Apache Airflow 2.8.1 com Python 3.11.
+- **Banco de dados:** PostgreSQL 16, provisionado com `banvic.sql`.
+- **Fontes:** tabelas PostgreSQL e `include/transacoes.csv`.
+- **Armazenamento da extração:** arquivos CSV organizados em `data/<data>/sql` e `data/<data>/csv`.
+- **Camadas analíticas:** schemas `staging` e `mart`.
+- **Agendamento:** diariamente às 04:35 (UTC, fuso padrão do Airflow).
+
+As conexões `banvic_postgres` (fonte) e `dw_postgres` (destino) usam o mesmo serviço PostgreSQL `db`; os dados de origem ficam no schema `public`, e as tabelas carregadas ficam em `staging` e `mart`.
 
 ## Pré-requisitos
-- Docker e Docker Compose instalados
-- Portas livres: 8080 (Airflow), 55432 (PostgreSQL DW)
-## Instalação
 
-### 1. Configurar Data Warehouse
+- Docker com Docker Compose v2 (`docker compose`).
+- Porta `8080` disponível para a interface do Airflow.
+- Porta `55432` disponível para acessar o PostgreSQL a partir da máquina local.
+
+## Configuração e instalação
+
+1. Na raiz do projeto, crie o arquivo local de configuração a partir do modelo:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   Edite `.env` e substitua os valores de exemplo por senhas fortes e uma chave secreta própria. Não compartilhe nem faça commit desse arquivo; ele é ignorado pelo Git.
+
+2. Inicie os serviços:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   O Compose inicia o PostgreSQL do BanVic, o banco de metadados do Airflow, a inicialização do Airflow, o webserver e o scheduler. O arquivo `banvic.sql` é aplicado na primeira inicialização do volume do PostgreSQL.
+
+3. Acesse [http://localhost:8080](http://localhost:8080) e entre com o usuário e a senha definidos pelas variáveis `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` no `.env`.
+
+As conexões `banvic_postgres` e `dw_postgres` são configuradas automaticamente pelo Docker Compose usando as variáveis do `.env`; não é necessário cadastrá-las manualmente na interface do Airflow.
+
+## Execução da pipeline
+
+A DAG `banvic_pipeline` executa estas tarefas:
+
+1. `extract_sql` e `extract_csv` rodam em paralelo. A primeira extrai as tabelas `agencias`, `clientes`, `colaboradores`, `colaborador_agencia`, `contas` e `propostas_credito`; a segunda lê `include/transacoes.csv`.
+2. Ambas salvam seus resultados em `data/<data>/sql` ou `data/<data>/csv`, usando a data lógica da execução.
+3. `load_dw` carrega os CSVs nos schemas `staging` e `mart`.
+4. `transform_mart` atualiza `mart.resumo_agencias`, com totais de contas e clientes e saldos por agência.
+
+Para executar manualmente, ative a DAG `banvic_pipeline` na interface do Airflow e dispare uma execução.
+
+![Execução da DAG banvic_pipeline no Airflow](images/dag.png)
+
+## Verificação dos dados
+
+Abra uma sessão `psql` no serviço do banco:
+
 ```bash
-# Clone ou extraia os arquivos do projeto
-cd banvic-pipeline
-
-# Subir PostgreSQL Data Warehouse
-docker-compose up -d
-
-### 2. Configurar Airflow
-```bash
-cd airflow-docker
-
-# Copie a DAG para o diretório do Airflow
-cp ../dags/banvic_pipeline.py dags/
-
-# Copie o CSV para o diretório include do Airflow
-cp ../include/transacoes.csv include/
-
-# Subir Airflow
-docker-compose up -d
+docker compose exec db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
-### 3. Configurar Conexões no Airflow
-Acesse http://localhost:8080 e configure:
+No prompt do `psql`, confira os schemas e consulte algumas tabelas:
 
-**Conexão 1: banvic_postgres (fonte)**
-- Connection Id: `banvic_postgres`
-- Connection Type: `Postgres`
-- Host: `host.docker.internal`
-- Database: `banvic`
-- Login: `data_engineer`
-- Password: `v3rysecur&pas5w0rd`
-- Port: `55432`
-
-**Conexão 2: dw_postgres (destino)**
-- Connection Id: `dw_postgres`
-- Connection Type: `Postgres`
-- Host: `host.docker.internal`
-- Database: `banvic`
-- Login: `data_engineer`
-- Password: `v3rysecur&pas5w0rd`
-- Port: `55432`
-
-<img width="1920" height="1080" alt="airflow1" src="https://github.com/user-attachments/assets/37a27ff8-f35f-4d1a-b78d-60369c1a1ead" />
-<img width="1920" height="1080" alt="airflow2" src="https://github.com/user-attachments/assets/9bebec81-037a-4550-846a-c8e295187fad" />
-
-## Execução
-
-### 1. Execução Automática
-A pipeline está configurada para rodar diariamente às 04:35.
-
-
-
-### 1. Arquivos CSV Extraídos
-```bash
-# Acessar container do Airflow
-docker exec -it airflow-docker-airflow-worker-1 bash
-
-### 2. Dados no Data Warehouse
-```bash
-# Conectar ao PostgreSQL
-docker exec -it banvic-pipeline-db-1 psql -U data_engineer -d banvic 
-
-# Verificar schemas e tabelas
+```sql
 \dn
 \dt staging.*
 \dt mart.*
 
-# Contar registros
 SELECT COUNT(*) FROM mart.sql_agencias;
-SELECT COUNT(*) FROM mart.sql_clientes;
 SELECT COUNT(*) FROM mart.csv_transacoes;
+SELECT COUNT(*) FROM mart.resumo_agencias;
 ```
 
-## Estrutura dos Dados
+## Estrutura do projeto
 
-### Schemas
-- **staging**: Dados brutos extraídos das fontes
-- **mart**: Dados processados prontos para análise
+```text
+.
+├── dags/banvic_pipeline.py  # Definição da DAG e tarefas ELT
+├── data/                    # Extrações por data (não versionadas)
+├── images/dag.png           # Captura da DAG no Airflow
+├── include/transacoes.csv   # CSV de entrada da pipeline
+├── logs/                    # Logs do Airflow (não versionados)
+├── banvic.sql               # Estrutura e dados iniciais do PostgreSQL
+├── docker-compose.yml       # Serviços, volumes e conexões do Airflow
+└── .env.example             # Modelo de configuração local
+```
 
-### Tabelas Principais
-- `sql_agencias`: Informações das agências
-- `sql_clientes`: Dados dos clientes
-- `sql_propostas_credito`: Propostas de crédito
-- `csv_transacoes`: Transações financeiras
-
-## Características Técnicas
-
-### Idempotência
-A pipeline é idempotente - múltiplas execuções na mesma data produzem o mesmo resultado usando TRUNCATE + INSERT.
-
-### Paralelização
-As extrações SQL e CSV executam em paralelo.
-
-### Tratamento de Erros
-- Dependências entre tasks garantem ordem correta
+As extrações são repetíveis: o carregamento limpa as tabelas de destino antes de inserir os dados da execução. Os diretórios `data/` e `logs/` são locais e estão excluídos do controle de versão.
