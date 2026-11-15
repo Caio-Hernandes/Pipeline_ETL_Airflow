@@ -6,7 +6,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - ./dbdata:/var/lib/postgresql/data
-      - ./banvic.sql:/docker-entrypoint-initdb.d/banvic.sql
+      - postgres_data:/var/lib/postgresql/data
+      - ./banvic.sql:/docker-entrypoint-initdb.d/banvic.sql:ro
     ports:
-      - 55432:5432
+      - "55432:5432"
+
+volumes:
+  postgres_data:
